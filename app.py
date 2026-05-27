@@ -2,6 +2,7 @@
 Cosmo·Universe — Chatbot RAG multilingue FR / KR / EN
 Securite : rate limiting + sanitize input + confidentialite
 + correction comptage produits par marque
++ auto-indexation au demarrage si ChromaDB vide
 """
 
 import os
@@ -9,6 +10,7 @@ import re
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 
+import pandas as pd
 import streamlit as st
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
@@ -18,12 +20,12 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass 
-load_dotenv()
+    pass
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY", "")
+OPENAI_API_KEY  = os.environ.get("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY", "")
 CHROMA_PATH     = "./chroma_db"
 COLLECTION_NAME = "cosmetiques_multilingue"
+CSV_PATH        = "products.csv"
 MAX_HISTORY     = 5
 MAX_QUESTIONS   = 20
 MAX_INPUT_LEN   = 500
@@ -51,20 +53,69 @@ hr { border-color: #F0E4DC !important; }
 """
 
 # ─────────────────────────────────────────────
-# Initialisation (mis en cache)
+# Auto-indexation + initialisation vectorstore
 # ─────────────────────────────────────────────
 
 @st.cache_resource
 def load_vectorstore():
+    """
+    Charge ChromaDB. Si la collection est vide,
+    indexe automatiquement products.csv.
+    """
     embeddings = OpenAIEmbeddings(
         model="text-embedding-3-small",
         openai_api_key=OPENAI_API_KEY
     )
-    return Chroma(
+
+    vectorstore = Chroma(
         collection_name=COLLECTION_NAME,
         embedding_function=embeddings,
         persist_directory=CHROMA_PATH
     )
+
+    # Si vide → indexation automatique depuis products.csv
+    if vectorstore._collection.count() == 0:
+        with st.spinner("Initialisation du catalogue en cours... (premiere execution uniquement)"):
+            df = pd.read_csv(CSV_PATH, on_bad_lines="skip")
+
+            documents = []
+            metadatas = []
+            ids       = []
+
+            for i, row in df.iterrows():
+                doc = (
+                    f"Produit: {row['nom']} | Brand: {row['marque']}\n"
+                    f"Categorie: {row['categorie']}\n"
+                    f"Prix: {row['prix_eur']}EUR\n"
+                    f"Caracteristiques: {row['caracteristiques']}\n"
+                    f"FR: {row['description_fr']}\n"
+                    f"KR: {row['description_kr']}\n"
+                    f"EN: {row['description_en']}"
+                )
+                documents.append(doc)
+                metadatas.append({
+                    "nom":              str(row["nom"]),
+                    "marque":           str(row["marque"]),
+                    "categorie":        str(row["categorie"]),
+                    "prix_eur":         float(row["prix_eur"]),
+                    "caracteristiques": str(row["caracteristiques"]),
+                    "description_fr":   str(row["description_fr"]),
+                    "description_kr":   str(row["description_kr"]),
+                    "description_en":   str(row["description_en"]),
+                    "type_produit":     str(row["type_produit"]),
+                })
+                ids.append(f"product_{i}")
+
+            # Indexation par batch de 20
+            batch_size = 20
+            for i in range(0, len(documents), batch_size):
+                vectorstore._collection.add(
+                    documents=documents[i:i+batch_size],
+                    metadatas=metadatas[i:i+batch_size],
+                    ids=ids[i:i+batch_size]
+                )
+
+    return vectorstore
 
 @st.cache_resource
 def load_llm():
@@ -104,13 +155,12 @@ def get_price_range() -> dict:
     return {"min": min(prices) if prices else 0, "max": max(prices) if prices else 0}
 
 def get_products_by_brand(brand: str) -> list:
-    """Retourne TOUS les produits d une marque — sans limite TOP_K."""
     vectorstore = load_vectorstore()
     results = vectorstore.get(where={"marque": brand})
     return results["metadatas"]
 
 # ─────────────────────────────────────────────
-# Sécurité — validation input
+# Securite — validation input
 # ─────────────────────────────────────────────
 
 def sanitize_input(query: str) -> str:
@@ -160,7 +210,7 @@ PRODUCT_TYPES = {
 }
 
 # ─────────────────────────────────────────────
-# Détection de langue
+# Detection de langue
 # ─────────────────────────────────────────────
 
 def detect_language(query: str, history: list = []) -> str:
@@ -197,11 +247,10 @@ def detect_language(query: str, history: list = []) -> str:
         return "French"
 
 # ─────────────────────────────────────────────
-# Détection marque dans la question
+# Detection marque dans la question
 # ─────────────────────────────────────────────
 
 def detect_brand_in_query(query: str, history: list) -> str:
-    """Détecte si une marque spécifique est mentionnée dans la question ou l historique."""
     user_msgs = [m["content"] for m in history if m["role"] == "user"][-2:]
     full_context = " ".join(user_msgs + [query]).lower()
     for brand in get_all_brands():
@@ -221,7 +270,6 @@ def extract_filters(query: str, history: list):
     type_filter   = None
     marque_filter = None
 
-    # "entre X et Y euros" / "X유로에서 Y유로"
     match = re.search(r"entre\s+(\d+)\s+et\s+(\d+)|(\d+)유로\s*에서\s*(\d+)유로", full_context)
     if match:
         low  = float(match.group(1) or match.group(3))
@@ -231,25 +279,21 @@ def extract_filters(query: str, history: list):
             {"prix_eur": {"$lte": high}}
         ]}
 
-    # "moins de X" / "under X" / "en dessous de X" / "X유로 이하"
     match = re.search(r"moins de\s+(\d+)|under\s+(\d+)|en dessous de\s+(\d+)|(\d+)유로\s*이하", full_context)
     if match and not prix_filter:
         val = match.group(1) or match.group(2) or match.group(3) or match.group(4)
         prix_filter = {"prix_eur": {"$lte": float(val)}}
 
-    # "plus de X" / "over X" / "X유로 이상"
     match = re.search(r"plus de\s+(\d+)|over\s+(\d+)|(\d+)유로\s*이상", full_context)
     if match and not prix_filter:
         val = match.group(1) or match.group(2) or match.group(3)
         prix_filter = {"prix_eur": {"$gte": float(val)}}
 
-    # Filtre marque
     for brand in get_all_brands():
         if brand.lower() in full_context:
             marque_filter = {"marque": brand}
             break
 
-    # Filtre type produit
     catalogue_questions = [
         "marque", "brand", "catégorie", "category",
         "liste", "list", "prix", "price", "브랜드", "카테고리",
@@ -263,7 +307,6 @@ def extract_filters(query: str, history: list):
                 type_filter = {"type_produit": type_key}
                 break
 
-    # Combinaison filtres
     active_filters = []
     if prix_filter:
         if "$and" in prix_filter:
@@ -375,23 +418,14 @@ def build_enriched_query(query: str, history: list) -> str:
     return query
 
 def retrieve_products(query: str, history: list) -> tuple:
-    """
-    Retourne (produits, total_reel).
-    Pour les questions de comptage par marque → total_reel = vrai nombre.
-    """
     count_keywords = ["combien", "how many", "몇 개", "nombre", "number", "total", "count"]
     is_count_question = any(kw in query.lower() for kw in count_keywords)
-
     brand = detect_brand_in_query(query, history)
 
-    # Question de comptage sur une marque → on récupère TOUS les produits
     if brand and is_count_question:
         all_products = get_products_by_brand(brand)
-        total        = len(all_products)
-        # On passe les 10 premiers au LLM pour qu il puisse en lister quelques-uns
-        return all_products[:10], total
+        return all_products[:10], len(all_products)
 
-    # Recherche normale
     vectorstore = load_vectorstore()
     top_k       = get_top_k(query)
     enriched    = build_enriched_query(query, history)
@@ -399,7 +433,6 @@ def retrieve_products(query: str, history: list) -> tuple:
     results     = vectorstore.similarity_search(enriched, k=top_k, filter=filters)
     products    = [doc.metadata for doc in results]
 
-    # Si une marque est détectée → on calcule le total réel pour le prompt
     if brand:
         total = len(get_products_by_brand(brand))
     else:
@@ -513,7 +546,7 @@ if "messages" not in st.session_state:
 if "request_count" not in st.session_state:
     st.session_state.request_count = 0
 
-# ─── Sidebar ───────────────────────────────────────────────────
+# Sidebar
 with st.sidebar:
     st.markdown("## 💄 Cosmo·Universe")
     st.divider()
@@ -535,7 +568,7 @@ with st.sidebar:
     st.caption("🇫🇷 Français · 🇰🇷 한국어 · 🇬🇧 English")
     st.caption("Posez vos questions dans la langue de votre choix.")
 
-# ─── Boutons exemples ──────────────────────────────────────────
+# Boutons exemples
 st.markdown('<div class="examples-label">💡 Exemples de questions</div>', unsafe_allow_html=True)
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -561,7 +594,7 @@ for message in st.session_state.messages:
 
 # Limite atteinte
 if st.session_state.request_count >= MAX_QUESTIONS:
-    st.warning(f"🚫 Vous avez atteint la limite de {MAX_QUESTIONS} questions pour cette session. Cliquez sur 🔄 Nouvelle conversation pour recommencer.")
+    st.warning(f"Vous avez atteint la limite de {MAX_QUESTIONS} questions pour cette session. Cliquez sur Nouvelle conversation pour recommencer.")
     st.stop()
 
 # Input
@@ -577,7 +610,7 @@ if query:
     query_clean = sanitize_input(query)
 
     if not query_clean:
-        st.warning("⚠️ Votre message contient des éléments non autorisés. Veuillez reformuler.")
+        st.warning("Votre message contient des éléments non autorisés. Veuillez reformuler.")
         st.stop()
 
     st.session_state.messages.append({"role": "user", "content": query_clean})
@@ -587,7 +620,7 @@ if query:
         st.markdown(query_clean)
 
     with st.chat_message("assistant"):
-        with st.spinner("🔍 Recherche en cours..."):
+        with st.spinner("Recherche en cours..."):
             history = st.session_state.messages[:-1]
             result  = ask(query_clean, history)
         st.markdown(result["answer"])
