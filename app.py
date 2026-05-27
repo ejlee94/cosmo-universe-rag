@@ -218,9 +218,18 @@ PRODUCT_TYPES = {
 # ─────────────────────────────────────────────
 
 def detect_language(query: str, history: list = []) -> str:
-    if any('\uAC00' <= c <= '\uD7A3' or '\u1100' <= c <= '\u11FF' for c in query):
-        korean_chars = sum(1 for c in query if '\uAC00' <= c <= '\uD7A3')
-        latin_chars  = sum(1 for c in query if c.isalpha() and c.isascii())
+    
+    # Supprime les noms de marques pour ne pas biaiser la détection
+    query_clean = query
+    for brand in ["Prestige Beauté", "Lumière Paris", "Douceur Naturelle", 
+                  "Belle Séoul", "Hanul Beauté", "Maison Florale", 
+                  "Paris Glow", "Corps Doux", "Mirae Cosmetics",
+                  "Protection Soleil", "Cheveux Lumière"]:
+        query_clean = query_clean.replace(brand, "")
+
+    if any('\uAC00' <= c <= '\uD7A3' or '\u1100' <= c <= '\u11FF' for c in query_clean):
+        korean_chars = sum(1 for c in query_clean if '\uAC00' <= c <= '\uD7A3')
+        latin_chars  = sum(1 for c in query_clean if c.isalpha() and c.isascii())
         if korean_chars > latin_chars:
             return "Korean"
         else:
@@ -232,9 +241,10 @@ def detect_language(query: str, history: list = []) -> str:
                 "donne", "liste", "avez", "avons", "cherche", "veux", "puis"]
     en_words = ["the", "a", "an", "is", "are", "have", "how", "what", "which",
                 "only", "do", "you", "can", "product", "under", "over", "best",
-                "give", "list", "show", "tell", "find", "many", "brands", "not"]
+                "give", "list", "show", "tell", "find", "many", "brands", "not",
+                "interested", "all", "looking", "want", "give"]
 
-    words    = query.lower().split()
+    words    = query_clean.lower().split()
     fr_score = sum(1 for w in words if w in fr_words)
     en_score = sum(1 for w in words if w in en_words)
 
