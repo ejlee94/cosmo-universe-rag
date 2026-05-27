@@ -10,14 +10,18 @@ import sys
 sys.stdout.reconfigure(encoding='utf-8')
 
 import streamlit as st
-from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain.prompts import ChatPromptTemplate
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass 
 load_dotenv()
 
-OPENAI_API_KEY  = os.environ.get("OPENAI_API_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY", "")
 CHROMA_PATH     = "./chroma_db"
 COLLECTION_NAME = "cosmetiques_multilingue"
 MAX_HISTORY     = 5
