@@ -111,10 +111,10 @@ def index_products_if_needed():
             ids.append(f"product_{i}")
 
         for i in range(0, len(documents), 20):
-            vectorstore._collection.add(
-                documents=documents[i:i+20],
-                metadatas=metadatas[i:i+20],
-                ids=ids[i:i+20]
+            vectorstore.add_texts(
+            texts=documents[i:i+20],
+            metadatas=metadatas[i:i+20],
+            ids=ids[i:i+20]
             )
 
 @st.cache_resource
