@@ -218,47 +218,86 @@ PRODUCT_TYPES = {
 # ─────────────────────────────────────────────
 
 def detect_language(query: str, history: list = []) -> str:
-    
-    # Supprime les noms de marques pour ne pas biaiser la détection
-    query_clean = query
-    for brand in ["Prestige Beauté", "Lumière Paris", "Douceur Naturelle", 
-                  "Belle Séoul", "Hanul Beauté", "Maison Florale", 
-                  "Paris Glow", "Corps Doux", "Mirae Cosmetics",
-                  "Protection Soleil", "Cheveux Lumière"]:
-        query_clean = query_clean.replace(brand, "")
+    import unicodedata
 
-    if any('\uAC00' <= c <= '\uD7A3' or '\u1100' <= c <= '\u11FF' for c in query_clean):
-        korean_chars = sum(1 for c in query_clean if '\uAC00' <= c <= '\uD7A3')
-        latin_chars  = sum(1 for c in query_clean if c.isalpha() and c.isascii())
-        if korean_chars > latin_chars:
-            return "Korean"
+    def remove_accents(text):
+        return ''.join(
+            c for c in unicodedata.normalize('NFD', text)
+            if unicodedata.category(c) != 'Mn'
+        )
+
+    # 1. Supprime les marques AVANT toute détection
+    query_clean = query
+    for brand in get_all_brands():
+        query_clean = query_clean.replace(brand, "")
+        query_clean = query_clean.replace(remove_accents(brand), "")
+    query_clean = query_clean.strip()
+
+    # 2. Compte les caractères par langue sur la query NETTOYEE
+    korean_chars = sum(1 for c in query_clean if '\uAC00' <= c <= '\uD7A3')
+    latin_chars  = sum(1 for c in query_clean if c.isalpha() and c.isascii())
+    korean_words = len([w for w in query_clean.split() if any('\uAC00' <= c <= '\uD7A3' for c in w)])
+    total_words  = len(query_clean.split())
+
+    # 3. Si coréen présent — decide selon ratio de MOTS (pas de caractères)
+    if korean_chars > 0:
+        korean_ratio = korean_words / total_words if total_words > 0 else 0
+        
+        if korean_ratio >= 0.5:
+            return "Korean"              # Majorité coréenne → Korean
+        elif latin_chars == 0:
+            return "Korean"              # Que du coréen → Korean
         else:
-            return "Korean and the Latin language used"
+            # Coréen minoritaire → continue la détection FR/EN
+            pass                         # ← on tombe dans la détection FR/EN ci-dessous
+
+    # 4. Pas de coréen → détecte FR vs EN
+    query_expanded = remove_accents(query_clean).lower()
+    query_expanded = query_expanded.replace("i'm", "i am")
+    query_expanded = query_expanded.replace("it's", "it is")
+    query_expanded = query_expanded.replace("don't", "do not")
 
     fr_words = ["le", "la", "les", "un", "une", "des", "du", "je", "tu", "il",
                 "nous", "vous", "est", "sont", "avec", "pour", "sur", "dans",
-                "quel", "quelle", "comment", "combien", "seulement", "produit",
-                "donne", "liste", "avez", "avons", "cherche", "veux", "puis"]
+                "quel", "quelle", "comment", "combien", "produit", "donne",
+                "liste", "avez", "avons", "cherche", "veux", "mon", "ma",
+                "tout", "tous", "toute", "toutes", "qui", "que", "quoi"]
+
     en_words = ["the", "a", "an", "is", "are", "have", "how", "what", "which",
                 "only", "do", "you", "can", "product", "under", "over", "best",
                 "give", "list", "show", "tell", "find", "many", "brands", "not",
-                "interested", "all", "looking", "want", "give"]
+                "interested", "all", "looking", "want", "i", "in", "am", "me",
+                "my", "this", "that", "with", "for", "about", "more", "less",
+                "price", "brand", "recommend", "would", "like", "please",
+                "could", "need", "search", "cheap", "expensive", "available", 
+                "products", "of", "category", "categories", "type", "types",
+                "show", "get", "give", "display", "anti", "aging", "skin", "care"]
 
-    words    = query_clean.lower().split()
+    words    = query_expanded.split()
     fr_score = sum(1 for w in words if w in fr_words)
     en_score = sum(1 for w in words if w in en_words)
 
+    # Phrase courte → langue du dernier message
     if len(words) < 3 and history:
         user_msgs = [m["content"] for m in history if m["role"] == "user"]
         if user_msgs:
             return detect_language(user_msgs[-1])
 
+    # Mixte FR + EN
+    if fr_score > 0 and en_score > 0:
+        if en_score >= fr_score:
+            return "English and French"
+        else:
+            return "French and English"
+
+    if en_score > 0 and fr_score == 0:
+        return "English"
     if fr_score > en_score:
         return "French"
     elif en_score > fr_score:
         return "English"
     else:
-        return "French"
+        return "French"  # vrai defaut — aucun mot reconnu
 
 # ─────────────────────────────────────────────
 # Detection marque dans la question
@@ -499,7 +538,7 @@ def ask(query: str, history: list) -> dict:
     price_range   = get_price_range()
 
     prompt   = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
-    chain    = prompt | load_llm()
+    chain    = prompt | load_llm()    
     response = chain.invoke({
         "context":       context,
         "question":      query,
