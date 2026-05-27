@@ -629,9 +629,9 @@ if query:
         st.warning("Votre message contient des éléments non autorisés. Veuillez reformuler.")
         st.stop()
 
-    st.session_state.messages.append({"role": "user", "content": query_clean})
     st.session_state.request_count += 1
-
+    st.session_state.messages.append({"role": "user", "content": query_clean})
+    
     with st.chat_message("user"):
         st.markdown(query_clean)
 
