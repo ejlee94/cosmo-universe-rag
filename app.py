@@ -12,7 +12,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 import streamlit as st
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 
 try:
     from dotenv import load_dotenv
