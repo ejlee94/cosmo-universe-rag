@@ -58,64 +58,58 @@ hr { border-color: #F0E4DC !important; }
 
 @st.cache_resource
 def load_vectorstore():
-    """
-    Charge ChromaDB. Si la collection est vide,
-    indexe automatiquement products.csv.
-    """
+    """Charge ChromaDB sans indexation."""
     embeddings = OpenAIEmbeddings(
         model="text-embedding-3-small",
         openai_api_key=OPENAI_API_KEY
     )
-
-    vectorstore = Chroma(
+    return Chroma(
         collection_name=COLLECTION_NAME,
         embedding_function=embeddings,
         persist_directory=CHROMA_PATH
     )
+    
+def index_products_if_needed():
+    """Indexe products.csv si ChromaDB est vide. A appeler depuis l interface."""
+    vectorstore = load_vectorstore()
+    
+    if vectorstore._collection.count() > 0:
+        return  # Deja indexe
+    
+    with st.spinner("Initialisation du catalogue... (premiere execution uniquement)"):
+        df = pd.read_csv(CSV_PATH, on_bad_lines="skip")
+        documents, metadatas, ids = [], [], []
 
-    # Si vide → indexation automatique depuis products.csv
-    if vectorstore._collection.count() == 0:
-        with st.spinner("Initialisation du catalogue en cours... (premiere execution uniquement)"):
-            df = pd.read_csv(CSV_PATH, on_bad_lines="skip")
+        for i, row in df.iterrows():
+            doc = (
+                f"Produit: {row['nom']} | Brand: {row['marque']}\n"
+                f"Categorie: {row['categorie']}\n"
+                f"Prix: {row['prix_eur']}EUR\n"
+                f"Caracteristiques: {row['caracteristiques']}\n"
+                f"FR: {row['description_fr']}\n"
+                f"KR: {row['description_kr']}\n"
+                f"EN: {row['description_en']}"
+            )
+            documents.append(doc)
+            metadatas.append({
+                "nom":              str(row["nom"]),
+                "marque":           str(row["marque"]),
+                "categorie":        str(row["categorie"]),
+                "prix_eur":         float(row["prix_eur"]),
+                "caracteristiques": str(row["caracteristiques"]),
+                "description_fr":   str(row["description_fr"]),
+                "description_kr":   str(row["description_kr"]),
+                "description_en":   str(row["description_en"]),
+                "type_produit":     str(row["type_produit"]),
+            })
+            ids.append(f"product_{i}")
 
-            documents = []
-            metadatas = []
-            ids       = []
-
-            for i, row in df.iterrows():
-                doc = (
-                    f"Produit: {row['nom']} | Brand: {row['marque']}\n"
-                    f"Categorie: {row['categorie']}\n"
-                    f"Prix: {row['prix_eur']}EUR\n"
-                    f"Caracteristiques: {row['caracteristiques']}\n"
-                    f"FR: {row['description_fr']}\n"
-                    f"KR: {row['description_kr']}\n"
-                    f"EN: {row['description_en']}"
-                )
-                documents.append(doc)
-                metadatas.append({
-                    "nom":              str(row["nom"]),
-                    "marque":           str(row["marque"]),
-                    "categorie":        str(row["categorie"]),
-                    "prix_eur":         float(row["prix_eur"]),
-                    "caracteristiques": str(row["caracteristiques"]),
-                    "description_fr":   str(row["description_fr"]),
-                    "description_kr":   str(row["description_kr"]),
-                    "description_en":   str(row["description_en"]),
-                    "type_produit":     str(row["type_produit"]),
-                })
-                ids.append(f"product_{i}")
-
-            # Indexation par batch de 20
-            batch_size = 20
-            for i in range(0, len(documents), batch_size):
-                vectorstore._collection.add(
-                    documents=documents[i:i+batch_size],
-                    metadatas=metadatas[i:i+batch_size],
-                    ids=ids[i:i+batch_size]
-                )
-
-    return vectorstore
+        for i in range(0, len(documents), 20):
+            vectorstore._collection.add(
+                documents=documents[i:i+20],
+                metadatas=metadatas[i:i+20],
+                ids=ids[i:i+20]
+            )
 
 @st.cache_resource
 def load_llm():
@@ -537,6 +531,8 @@ st.markdown("""
     </div>
 </div>
 """, unsafe_allow_html=True)
+
+index_products_if_needed()
 
 st.divider()
 
