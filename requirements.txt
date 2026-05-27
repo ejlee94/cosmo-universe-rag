@@ -2,7 +2,8 @@ streamlit
 langchain
 langchain-openai
 langchain-chroma
-chromadb
+chromadb==0.6.3
 openai
 pandas
 python-dotenv
+protobuf==4.25.3
