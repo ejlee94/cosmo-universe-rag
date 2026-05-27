@@ -609,13 +609,16 @@ if "request_count" not in st.session_state:
     st.session_state.request_count = 0
 
 # Sidebar
+# Sidebar — placeholder mis a jour apres chaque question
 with st.sidebar:
     st.markdown("## 💄 Cosmo·Universe")
     st.divider()
 
     st.markdown("**💬 Questions**")
-    st.progress(st.session_state.request_count / MAX_QUESTIONS)
-    st.caption(f"{st.session_state.request_count} / {MAX_QUESTIONS} questions utilisées")
+    counter_placeholder = st.empty()  # ← placeholder
+    counter_placeholder.progress(st.session_state.request_count / MAX_QUESTIONS)
+    counter_caption = st.empty()
+    counter_caption.caption(f"{st.session_state.request_count} / {MAX_QUESTIONS} questions utilisées")
 
     st.divider()
 
@@ -675,10 +678,15 @@ if query:
     query_clean = sanitize_input(query)
 
     if not query_clean:
-        st.warning("Votre message contient des éléments non autorisés. Veuillez reformuler.")
+        st.warning("Votre message contient des éléments non autorisés.")
         st.stop()
 
-    st.session_state.request_count += 1
+    st.session_state.request_count += 1  # ← incrémenter EN PREMIER
+
+    # Mettre a jour le compteur sidebar immédiatement
+    counter_placeholder.progress(st.session_state.request_count / MAX_QUESTIONS)
+    counter_caption.caption(f"{st.session_state.request_count} / {MAX_QUESTIONS} questions utilisées")
+
     st.session_state.messages.append({"role": "user", "content": query_clean})
     
     with st.chat_message("user"):
