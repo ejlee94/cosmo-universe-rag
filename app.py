@@ -53,12 +53,12 @@ hr { border-color: #F0E4DC !important; }
 """
 
 # ─────────────────────────────────────────────
-# Auto-indexation + initialisation vectorstore
+# Vectorstore — chargement et auto-indexation
 # ─────────────────────────────────────────────
 
 @st.cache_resource
 def load_vectorstore():
-    """Charge ChromaDB sans indexation."""
+    """Charge ChromaDB — sans indexation."""
     embeddings = OpenAIEmbeddings(
         model="text-embedding-3-small",
         openai_api_key=OPENAI_API_KEY
@@ -68,17 +68,23 @@ def load_vectorstore():
         embedding_function=embeddings,
         persist_directory=CHROMA_PATH
     )
-    
+
 def index_products_if_needed():
-    """Indexe products.csv si ChromaDB est vide. A appeler depuis l interface."""
+    """
+    Indexe products.csv dans ChromaDB si la collection est vide.
+    Appelee depuis l interface Streamlit — pas depuis une fonction cachee.
+    """
     vectorstore = load_vectorstore()
-    
+
     if vectorstore._collection.count() > 0:
         return  # Deja indexe
-    
+
     with st.spinner("Initialisation du catalogue... (premiere execution uniquement)"):
         df = pd.read_csv(CSV_PATH, on_bad_lines="skip")
-        documents, metadatas, ids = [], [], []
+
+        documents = []
+        metadatas = []
+        ids       = []
 
         for i, row in df.iterrows():
             doc = (
@@ -145,10 +151,14 @@ def get_all_categories() -> list:
 def get_price_range() -> dict:
     vectorstore = load_vectorstore()
     results = vectorstore.get()
-    prices = [m["prix_eur"] for m in results["metadatas"] if "prix_eur" in m and isinstance(m["prix_eur"], (int, float))]
+    prices = [
+        m["prix_eur"] for m in results["metadatas"]
+        if "prix_eur" in m and isinstance(m["prix_eur"], (int, float))
+    ]
     return {"min": min(prices) if prices else 0, "max": max(prices) if prices else 0}
 
 def get_products_by_brand(brand: str) -> list:
+    """Retourne TOUS les produits d une marque sans limite TOP_K."""
     vectorstore = load_vectorstore()
     results = vectorstore.get(where={"marque": brand})
     return results["metadatas"]
@@ -264,6 +274,7 @@ def extract_filters(query: str, history: list):
     type_filter   = None
     marque_filter = None
 
+    # "entre X et Y euros" / "X유로에서 Y유로"
     match = re.search(r"entre\s+(\d+)\s+et\s+(\d+)|(\d+)유로\s*에서\s*(\d+)유로", full_context)
     if match:
         low  = float(match.group(1) or match.group(3))
@@ -273,21 +284,25 @@ def extract_filters(query: str, history: list):
             {"prix_eur": {"$lte": high}}
         ]}
 
+    # "moins de X" / "under X" / "en dessous de X" / "X유로 이하"
     match = re.search(r"moins de\s+(\d+)|under\s+(\d+)|en dessous de\s+(\d+)|(\d+)유로\s*이하", full_context)
     if match and not prix_filter:
         val = match.group(1) or match.group(2) or match.group(3) or match.group(4)
         prix_filter = {"prix_eur": {"$lte": float(val)}}
 
+    # "plus de X" / "over X" / "X유로 이상"
     match = re.search(r"plus de\s+(\d+)|over\s+(\d+)|(\d+)유로\s*이상", full_context)
     if match and not prix_filter:
         val = match.group(1) or match.group(2) or match.group(3)
         prix_filter = {"prix_eur": {"$gte": float(val)}}
 
+    # Filtre marque
     for brand in get_all_brands():
         if brand.lower() in full_context:
             marque_filter = {"marque": brand}
             break
 
+    # Filtre type produit
     catalogue_questions = [
         "marque", "brand", "catégorie", "category",
         "liste", "list", "prix", "price", "브랜드", "카테고리",
@@ -301,6 +316,7 @@ def extract_filters(query: str, history: list):
                 type_filter = {"type_produit": type_key}
                 break
 
+    # Combinaison filtres avec $and
     active_filters = []
     if prix_filter:
         if "$and" in prix_filter:
@@ -349,30 +365,30 @@ Tu es un assistant expert en cosmétiques pour une boutique mondiale haut de gam
 CONNAISSANCE DU CATALOGUE :
 - Marques disponibles : {brands}
 - Types de produits : {type_products}
-- Catégories : {categories}
-- Fourchette de prix : {price_min} à {price_max}
-- Nombre TOTAL de produits de la marque demandée : {brand_total}
+- Categories : {categories}
+- Fourchette de prix : {price_min} a {price_max}
+- Nombre TOTAL de produits de la marque demandee : {brand_total}
 
 INSTRUCTIONS :
-- La langue détectée de la question est : {detected_lang}
-- Tu DOIS répondre en {detected_lang}, sans exception.
-- RÈGLE ABSOLUE :
-    * Question en français   → réponse en FRANÇAIS UNIQUEMENT
-    * Question en coréen     → réponse en CORÉEN UNIQUEMENT
-    * Question en anglais    → réponse en ANGLAIS UNIQUEMENT
-    * Question mélangée FR+KR → réponds dans les deux langues naturellement
-    * Question mélangée EN+KR → réponds dans les deux langues naturellement
-    * Question mélangée FR+EN → réponds dans les deux langues naturellement
+- La langue detectee de la question est : {detected_lang}
+- Tu DOIS repondre en {detected_lang}, sans exception.
+- REGLE ABSOLUE :
+    * Question en francais   -> reponse en FRANCAIS UNIQUEMENT
+    * Question en coreen     -> reponse en COREEN UNIQUEMENT
+    * Question en anglais    -> reponse en ANGLAIS UNIQUEMENT
+    * Question melangee FR+KR -> reponds dans les deux langues naturellement
+    * Question melangee EN+KR -> reponds dans les deux langues naturellement
+    * Question melangee FR+EN -> reponds dans les deux langues naturellement
 - Ne te laisse PAS influencer par la langue des descriptions produits dans le contexte.
-- La langue de ta réponse = la langue de la QUESTION, toujours.
-- Tiens compte de l'historique pour comprendre le contexte.
-- Si l'utilisateur dit "le moins cher" ou "detail" sans préciser le produit,
-  réfère-toi à l'historique pour comprendre de quel produit il parle.
-- Pour les questions sur les marques, types, catégories ou prix → utilise
+- La langue de ta reponse = la langue de la QUESTION, toujours.
+- Tiens compte de l historique pour comprendre le contexte.
+- Si l utilisateur dit "le moins cher" ou "detail" sans preciser le produit,
+  refere-toi a l historique pour comprendre de quel produit il parle.
+- Pour les questions sur les marques, types, categories ou prix -> utilise
   la CONNAISSANCE DU CATALOGUE ci-dessus.
-- Pour le NOMBRE de produits d une marque → utilise TOUJOURS "brand_total" ci-dessus,
+- Pour le NOMBRE de produits d une marque -> utilise TOUJOURS "brand_total" ci-dessus,
   jamais le nombre de produits dans PRODUITS DISPONIBLES.
-- Base ta réponse EXCLUSIVEMENT sur les produits listés dans PRODUITS DISPONIBLES.
+- Base ta reponse EXCLUSIVEMENT sur les produits listes dans PRODUITS DISPONIBLES.
 - Si un produit n apparait pas dans PRODUITS DISPONIBLES, il n existe pas — ne l invente JAMAIS.
 - Si aucun produit ne correspond, dis CLAIREMENT que tu n as pas ce produit.
 - Ne complete JAMAIS avec des produits imaginaires ou issus de tes connaissances generales.
@@ -532,6 +548,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# Auto-indexation si ChromaDB vide
 index_products_if_needed()
 
 st.divider()
@@ -590,7 +607,10 @@ for message in st.session_state.messages:
 
 # Limite atteinte
 if st.session_state.request_count >= MAX_QUESTIONS:
-    st.warning(f"Vous avez atteint la limite de {MAX_QUESTIONS} questions pour cette session. Cliquez sur Nouvelle conversation pour recommencer.")
+    st.warning(
+        f"Vous avez atteint la limite de {MAX_QUESTIONS} questions pour cette session. "
+        "Cliquez sur Nouvelle conversation pour recommencer."
+    )
     st.stop()
 
 # Input
